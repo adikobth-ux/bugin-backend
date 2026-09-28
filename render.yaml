@@ -1,0 +1,16 @@
+# Render Blueprint: бесплатный тестовый сервер Bugin (этап 0).
+# Render → New → Blueprint → выбрать репозиторий bugin-backend.
+# Бесплатный сервер засыпает после 15 минут без запросов и просыпается около минуты.
+services:
+  - type: web
+    name: bugin-api
+    runtime: python
+    plan: free
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"

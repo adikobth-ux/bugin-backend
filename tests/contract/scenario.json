@@ -1,0 +1,32 @@
+{
+  "id": "plan_1790626000000",
+  "title": "Спокойный вечер вдвоём",
+  "subtitle": null,
+  "image": null,
+  "stops": [
+    {
+      "role": "coffee", "placeId": "coffee_lab", "kind": "coffee",
+      "title": "Coffee Lab", "kindLabel": "Кофе и десерт",
+      "startMinutes": 1140, "durationMinutes": 60, "cost": 4500,
+      "routeLabel": null, "rating": 4.7, "image": "assets/images/place_coffee_lab.jpg"
+    },
+    {
+      "role": "walk", "placeId": "esil_embankment", "kind": "walk",
+      "title": "Набережная Есиля", "kindLabel": "Прогулка",
+      "startMinutes": 1215, "durationMinutes": 45, "cost": 0,
+      "routeLabel": "набережная", "rating": null, "image": ""
+    },
+    {
+      "role": "dinner", "placeId": "the_garden", "kind": "dinner",
+      "title": "The Garden", "kindLabel": "Ужин",
+      "startMinutes": 1275, "durationMinutes": 105, "cost": 6000,
+      "routeLabel": null, "rating": 4.8, "image": "assets/images/place_the_garden.jpg"
+    }
+  ],
+  "legs": [{"mode": "walk", "minutes": 10}, {"mode": "taxi", "minutes": 8}],
+  "tags": [],
+  "request": {
+    "company": "pair", "day": "today", "date": null, "startMinutes": 1140,
+    "budget": 15000, "mood": "calm", "wishes": ""
+  }
+}

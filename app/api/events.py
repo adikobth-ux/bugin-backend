@@ -1,0 +1,52 @@
+"""/v1/events — афиша."""
+
+import datetime as dt
+
+from fastapi import APIRouter, Query
+
+from app import clock
+from app.api.deps import Lang, bad_request, not_found, split_ids
+from app.api.schemas import ERROR_RESPONSES, Event, EventCategory, EventDay
+from app.domain import catalog
+
+router = APIRouter(prefix="/events", tags=["Афиша"], responses=ERROR_RESPONSES)
+
+
+@router.get("", response_model=list[Event], summary="События дня или по списку id")
+def list_events(
+    lang: Lang,
+    day: EventDay | None = Query(default=None, description="Обязателен, если нет ids"),
+    date: dt.date | None = Query(default=None, description="YYYY-MM-DD, для day=date"),
+    category: EventCategory | None = Query(default=None),
+    ids: str | None = Query(default=None, description="Через запятую, вместо day"),
+) -> list[dict]:
+    """С ``day`` — события дня по времени начала; с ``ids`` — в порядке ``ids``."""
+    now = clock.now()
+    if ids is not None:
+        return catalog.events_by_ids(lang, now, split_ids(ids))
+    if day is None:
+        raise bad_request("Укажи day (today, tomorrow, weekend, date) или ids")
+    return catalog.events_for_day(lang, now, day, date, category)
+
+
+@router.get("/featured", response_model=list[Event], summary="Главные события недели")
+def featured(lang: Lang) -> list[dict]:
+    """``isFeatured`` в ближайшие 7 дней."""
+    return catalog.featured_events(lang, clock.now())
+
+
+@router.get("/{event_id}", response_model=Event, summary="Событие")
+def by_id(event_id: str, lang: Lang) -> dict:
+    event = catalog.event(lang, clock.now(), event_id)
+    if event is None:
+        raise not_found(f"Событие {event_id} не найдено")
+    return event
+
+
+@router.get("/{event_id}/similar", response_model=list[Event], summary="Похожие события")
+def similar(event_id: str, lang: Lang, limit: int = Query(default=4, ge=0, le=100)) -> list[dict]:
+    """Сначала той же категории, затем по времени; без самого события."""
+    now = clock.now()
+    if catalog.event(lang, now, event_id) is None:
+        raise not_found(f"Событие {event_id} не найдено")
+    return catalog.similar_events(lang, now, event_id, limit)

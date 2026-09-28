@@ -1,0 +1,46 @@
+name: CI
+
+# Проверка кода и тесты сервера на каждый push и pull request.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: .github/scripts/run.sh "ruff" ruff check .
+
+      - name: Tests
+        run: .github/scripts/run.sh "pytest" python -m pytest -q -rs
+
+      # Сервер действительно стартует так же, как на Render.
+      - name: Smoke start
+        run: |
+          uvicorn app.main:app --port 8000 &
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8000/health && exit 0
+            sleep 1
+          done
+          echo "::error title=smoke::сервер не ответил на /health"
+          exit 1

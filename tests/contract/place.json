@@ -1,0 +1,34 @@
+{
+  "id": "the_garden",
+  "name": "The Garden",
+  "subtitle": "Европейская кухня и завтраки весь день",
+  "description": "Уютное кафе в центре города: живая зелень, тёплый свет и европейская кухня.",
+  "category": "cafe",
+  "categoryDetail": "европейская кухня",
+  "address": "ул. Абая, 57",
+  "phone": "+7 700 123 45 67",
+  "rating": 4.8,
+  "reviewsCount": 1540,
+  "priceLevel": 2,
+  "averageCheck": 6000,
+  "openingHours": {"opensAt": 480, "closesAt": 1380},
+  "photos": ["assets/images/place_the_garden.jpg"],
+  "tags": ["Европейская кухня", "Завтраки"],
+  "amenities": [{"type": "wifi", "value": "Бесплатный"}],
+  "distanceKm": 1.5,
+  "taxiMinutes": 6,
+  "bookingType": "table",
+  "bookingUrl": null,
+  "pitch": "Уютно, живая зелень и тихая музыка",
+  "goodFor": ["date", "friends"],
+  "vibes": ["beautiful", "calm"],
+  "location": {"lat": 51.1283, "lng": 71.4305},
+  "reviews": [
+    {
+      "author": "Алина",
+      "rating": 5.0,
+      "text": "Очень уютно вечером, по пятницам живая музыка.",
+      "date": "2026-09-27T12:00:00"
+    }
+  ]
+}

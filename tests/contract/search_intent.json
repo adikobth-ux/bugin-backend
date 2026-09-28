@@ -1,0 +1,9 @@
+{
+  "query": "Свидание вечером до 10 000",
+  "params": [
+    {"type": "occasion", "code": "date", "inferred": false},
+    {"type": "time", "code": "evening", "inferred": false},
+    {"type": "budget", "code": "10000", "inferred": false},
+    {"type": "location", "code": "near", "inferred": true}
+  ]
+}
