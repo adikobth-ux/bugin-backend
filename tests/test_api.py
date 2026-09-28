@@ -62,6 +62,19 @@ class ApiTest(unittest.TestCase):
         )
         self.assertEqual(response.headers.get("access-control-allow-origin"), "*")
 
+    def test_cors_preflight_for_json_post(self):
+        # Браузер перед POST с JSON и языком спрашивает разрешения (OPTIONS).
+        response = self.client.options(
+            "/v1/search/understand",
+            headers={
+                "Origin": "https://adikobth-ux.github.io",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type,accept-language",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("POST", response.headers.get("access-control-allow-methods", ""))
+
     def test_errors_follow_the_contract(self):
         response = self.get("/v1/places/nope")
         self.assertEqual(response.status_code, 404)

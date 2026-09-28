@@ -44,9 +44,11 @@ ruff check .
 1. Зарегистрироваться на [render.com](https://render.com) через GitHub (карта не нужна).
 2. New → Blueprint → выбрать репозиторий `bugin-backend`. Render прочитает `render.yaml`
    и создаст сервис `bugin-api` (бесплатный тариф, Франкфурт).
-3. Адрес вида `https://bugin-api-xxxx.onrender.com` — проверить: `/health`, `/docs`.
-4. В репозитории приложения: Settings → Secrets and variables → Actions → Variables →
-   `BUGIN_API_URL` = этот адрес. Следующая сборка APK и веб-версии пойдёт на сервер.
+3. Сервер работает по адресу **https://bugin-api.onrender.com** — проверить: `/health`, `/docs`.
+   Каждый push в `main` Render выкладывает сам.
+4. Сборка приложения (APK и веб-версия) уже ходит на этот адрес. Другой адрес — переменная
+   `BUGIN_API_URL` в репозитории приложения (Settings → Secrets and variables → Actions →
+   Variables); значение `mock` — собрать без сервера.
 
 Ограничения бесплатного тарифа: после 15 минут без запросов сервер засыпает,
 первый запрос после паузы идёт около минуты. Сервер не в Казахстане — поэтому
