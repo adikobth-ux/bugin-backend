@@ -39,9 +39,9 @@ if [ "$status" -ne 0 ]; then
   [ -z "$excerpt" ] && excerpt=$(tail -n 150 "$log")
   emit error "$title" "$excerpt"
 else
-  # Предупреждения анализатора тоже полезно видеть.
-  warnings=$(grep -E "^\s*(warning|error) •" "$log" | head -c 30000)
-  [ -n "$warnings" ] && emit warning "$title" "$warnings"
+  # Итог («26 passed», «All checks passed!») — чтобы видеть его без скачивания логов.
+  result=$(grep -v '^[[:space:]]*$' "$log" | tail -n 1)
+  [ -n "$result" ] && emit notice "$title" "$result"
 fi
 
 exit "$status"

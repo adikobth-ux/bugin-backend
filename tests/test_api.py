@@ -6,12 +6,15 @@
 """
 
 import json
+import os
 import unittest
 from pathlib import Path
 
 try:
     from fastapi.testclient import TestClient
 except ImportError as error:  # pragma: no cover - локально без зависимостей
+    if os.environ.get("CI"):
+        raise  # в CI зависимости обязаны быть: пропуск спрятал бы непроверенный сервер
     raise unittest.SkipTest(f"нет FastAPI: {error}") from error
 
 from app.main import app
