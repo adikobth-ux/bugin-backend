@@ -86,6 +86,18 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(first["id"], catalog_data.BASTAU_GALLERY)
         self.assertEqual(first["distanceKm"], 0.0)
 
+    def test_distances_from_the_user_and_not_from_another_city(self):
+        gallery = catalog.place("ru", catalog_data.BASTAU_GALLERY)["location"]
+        user = (gallery["lat"], gallery["lng"])
+        self.assertEqual(catalog.place("ru", catalog_data.BASTAU_GALLERY, user)["distanceKm"], 0.0)
+        self.assertEqual(catalog.place("ru", catalog_data.BASTAU_GALLERY, user)["taxiMinutes"], 3)
+        moved = {e["id"]: e["distanceKm"] for e in catalog.events("ru", user)}
+        self.assertNotEqual(moved, {e["id"]: e["distanceKm"] for e in catalog.events("ru")})
+        # Из Алматы Астану смотрят как обычно — от центра.
+        almaty = (43.238, 76.945)
+        self.assertEqual(catalog.places("ru", almaty), catalog.places("ru"))
+        self.assertEqual(catalog.events("kk", almaty), catalog.events("kk"))
+
     def test_by_ids_keeps_order_and_skips_unknown(self):
         ids = [catalog_data.SKY_LOUNGE, "nope", catalog_data.THE_GARDEN]
         found = [p["id"] for p in catalog.places_by_ids("ru", ids)]

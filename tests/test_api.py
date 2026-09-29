@@ -105,6 +105,36 @@ class ApiTest(unittest.TestCase):
         self.assertEqual((first["id"], first["distanceKm"]), ("bastau_gallery", 0.0))
         self.assertEqual(self.get("/v1/places/nearby", params={"lat": 91, "lng": 0}).status_code, 422)
 
+    def test_user_location_header(self):
+        gallery = self.get("/v1/places/bastau_gallery").json()["location"]
+        here = {"X-Bugin-Location": f"{gallery['lat']},{gallery['lng']}"}
+        self.assertEqual(self.get("/v1/places/bastau_gallery", headers=here).json()["distanceKm"], 0.0)
+        first = self.get("/v1/places/nearby", params={"limit": 1}, headers=here).json()[0]
+        self.assertEqual(first["id"], "bastau_gallery")
+        plan = self.post("/v1/evening/plan", {"mood": "culture", "budget": None}, headers=here)
+        self.assertEqual(plan.status_code, 200)
+        found = self.post(
+            "/v1/search/recommend", {"intent": {"query": "", "params": []}}, headers=here
+        ).json()
+        self.assertTrue(found)
+        # Непонятный заголовок не ошибка: расстояния от центра.
+        usual = self.get("/v1/places/bastau_gallery").json()["distanceKm"]
+        for bad in ("abc", "51.1", "200,71", "nan,nan", "51.1,71.4,1"):
+            response = self.get("/v1/places/bastau_gallery", headers={"X-Bugin-Location": bad})
+            self.assertEqual(response.json()["distanceKm"], usual, bad)
+
+    def test_cors_allows_the_location_header(self):
+        response = self.client.options(
+            "/v1/places/nearby",
+            headers={
+                "Origin": "https://adikobth-ux.github.io",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "accept-language,x-bugin-location",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("x-bugin-location", response.headers.get("access-control-allow-headers", "").lower())
+
     def test_admin_changes_are_served_at_once(self):
         store = services.store()
         store.save_image("0123abcd0123abcd", "image/jpeg", b"\xff\xd8test", 1, 1)

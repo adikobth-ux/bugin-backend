@@ -23,6 +23,10 @@ CACHE_SECONDS = 600
 
 IMAGE_PATH = "/v1/images/"
 
+# Дальше этого от центра города положение пользователя не учитываем:
+# человек в другом городе смотрит Астану — расстояния от центра полезнее.
+MAX_ORIGIN_KM = 60
+
 PLACE_DEFAULTS: dict = {
     "subtitle": "",
     "description": "",
@@ -158,6 +162,12 @@ class Catalog:
                 self._by_lang[lang] = snapshot
             return snapshot
 
+    def user_origin(self, origin: tuple[float, float] | None) -> tuple[float, float] | None:
+        """Точка пользователя, если он в городе; из другого города считаем от центра."""
+        if origin is None or geo.distance_km(self.origin, origin) > MAX_ORIGIN_KM:
+            return None
+        return origin
+
     def invalidate(self) -> None:
         with self._lock:
             self._revision = -1
@@ -205,39 +215,55 @@ class Catalog:
 
     # ---------- Места ----------
 
-    def places(self, lang: str) -> list[dict]:
-        return self._snapshot(lang)[0]
+    # У всех запросов ``origin`` — где пользователь (lat, lng); None — центр города.
+    # Расстояния пересчитываются для каждого запроса: снимок кэша общий.
 
-    def place(self, lang: str, place_id: str) -> dict | None:
-        return _find(self.places(lang), place_id)
+    def places(self, lang: str, origin: tuple[float, float] | None = None) -> list[dict]:
+        places = self._snapshot(lang)[0]
+        origin = self.user_origin(origin)
+        if origin is None:
+            return places
+        return [self._moved(p, origin, taxi=True) for p in places]
 
-    def places_by_ids(self, lang: str, ids: list[str]) -> list[dict]:
+    def place(self, lang: str, place_id: str, origin: tuple[float, float] | None = None) -> dict | None:
+        return _find(self.places(lang, origin), place_id)
+
+    def places_by_ids(
+        self, lang: str, ids: list[str], origin: tuple[float, float] | None = None
+    ) -> list[dict]:
         """Места в порядке ``ids``; неизвестные и скрытые пропускаются."""
-        return _by_ids(self.places(lang), ids)
+        return _by_ids(self.places(lang, origin), ids)
 
     def nearby(self, lang: str, limit: int = 6, origin: tuple[float, float] | None = None) -> list[dict]:
         """Блок «Сейчас рядом»: ближайшие к ``origin`` (нет — к центру города)."""
-        places = self.places(lang)
-        if origin is not None:
-            places = [self._moved(p, origin) for p in places]
+        places = self.places(lang, origin)
         return sorted(places, key=lambda p: p["distanceKm"])[: max(limit, 0)]
 
     @staticmethod
-    def _moved(place: dict, origin: tuple[float, float]) -> dict:
-        km = geo.distance_km(origin, (place["location"]["lat"], place["location"]["lng"]))
-        return {**place, "distanceKm": geo.rounded_km(km), "taxiMinutes": geo.taxi_minutes(km)}
+    def _moved(item: dict, origin: tuple[float, float], *, taxi: bool) -> dict:
+        km = geo.distance_km(origin, (item["location"]["lat"], item["location"]["lng"]))
+        moved = {**item, "distanceKm": geo.rounded_km(km)}
+        if taxi:
+            moved["taxiMinutes"] = geo.taxi_minutes(km)
+        return moved
 
     # ---------- События ----------
 
-    def events(self, lang: str) -> list[dict]:
-        return self._snapshot(lang)[1]
+    def events(self, lang: str, origin: tuple[float, float] | None = None) -> list[dict]:
+        events = self._snapshot(lang)[1]
+        origin = self.user_origin(origin)
+        if origin is None:
+            return events
+        return [self._moved(e, origin, taxi=False) for e in events]
 
-    def event(self, lang: str, event_id: str) -> dict | None:
-        return _find(self.events(lang), event_id)
+    def event(self, lang: str, event_id: str, origin: tuple[float, float] | None = None) -> dict | None:
+        return _find(self.events(lang, origin), event_id)
 
-    def events_by_ids(self, lang: str, ids: list[str]) -> list[dict]:
+    def events_by_ids(
+        self, lang: str, ids: list[str], origin: tuple[float, float] | None = None
+    ) -> list[dict]:
         """События в порядке ``ids``; неизвестные и скрытые пропускаются."""
-        return _by_ids(self.events(lang), ids)
+        return _by_ids(self.events(lang, origin), ids)
 
     def events_for_day(
         self,
@@ -246,27 +272,39 @@ class Catalog:
         day: str,
         on_date: date | None = None,
         category: str | None = None,
+        origin: tuple[float, float] | None = None,
     ) -> list[dict]:
         """Афиша: события дня (и категории), по времени начала."""
         result = [
             e
-            for e in self.events(lang)
+            for e in self.events(lang, origin)
             if matches_day(e, day, on_date, now) and (category is None or e["category"] == category)
         ]
         return sorted(result, key=starts_at)
 
-    def featured_events(self, lang: str, now: datetime) -> list[dict]:
+    def featured_events(
+        self, lang: str, now: datetime, origin: tuple[float, float] | None = None
+    ) -> list[dict]:
         """``isFeatured`` в ближайшие 7 дней, в порядке каталога."""
         return [
-            e for e in self.events(lang) if e["isFeatured"] and 0 <= day_diff(starts_at(e), now) < 7
+            e
+            for e in self.events(lang, origin)
+            if e["isFeatured"] and 0 <= day_diff(starts_at(e), now) < 7
         ]
 
-    def similar_events(self, lang: str, now: datetime, event_id: str, limit: int = 4) -> list[dict]:
+    def similar_events(
+        self,
+        lang: str,
+        now: datetime,
+        event_id: str,
+        limit: int = 4,
+        origin: tuple[float, float] | None = None,
+    ) -> list[dict]:
         """Сначала той же категории, затем по времени; без самого события и прошедших."""
         source = self.event(lang, event_id)
         others = [
             e
-            for e in self.events(lang)
+            for e in self.events(lang, origin)
             if e["id"] != event_id and day_diff(starts_at(e), now) >= 0
         ]
 

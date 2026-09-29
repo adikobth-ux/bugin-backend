@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from app import clock, services
-from app.api.deps import Lang, bad_request, not_found
+from app.api.deps import Lang, UserOrigin, bad_request, not_found
 from app.api.schemas import (
     ERROR_RESPONSES,
     AlternativesBody,
@@ -18,22 +18,23 @@ from app.domain.planner import EveningPlanner, request_from_json, scenario_from_
 router = APIRouter(prefix="/evening", tags=["Вечер"], responses=ERROR_RESPONSES)
 
 
-def _planner(lang: str) -> EveningPlanner:
-    return EveningPlanner(lang, services.catalog().places(lang))
+def _planner(lang: str, user: tuple[float, float] | None = None) -> EveningPlanner:
+    # С точкой пользователя ближние к нему места идут в план первыми.
+    return EveningPlanner(lang, services.catalog().places(lang, user))
 
 
 @router.post("/plan", response_model=Scenario, summary="Собрать план")
-def plan(body: EveningRequest, lang: Lang) -> dict:
+def plan(body: EveningRequest, lang: Lang, user: UserOrigin) -> dict:
     """План в рамках бюджета по компании, времени и настроению."""
-    return _planner(lang).plan(request_from_json(body.model_dump()))
+    return _planner(lang, user).plan(request_from_json(body.model_dump()))
 
 
 @router.post("/alternatives", response_model=list[PlanStop], summary="Замены точки")
-def alternatives(body: AlternativesBody, lang: Lang) -> list[dict]:
+def alternatives(body: AlternativesBody, lang: Lang, user: UserOrigin) -> list[dict]:
     """Чем заменить точку ``index`` в рамках бюджета."""
     scenario = scenario_from_json(body.scenario.model_dump())
     try:
-        return _planner(lang).alternatives(scenario, body.index)
+        return _planner(lang, user).alternatives(scenario, body.index)
     except IndexError as error:
         raise bad_request(str(error)) from error
 
@@ -50,9 +51,9 @@ def replace(body: ReplaceBody, lang: Lang) -> dict:
 
 
 @router.get("/featured", response_model=Scenario, summary="Для тебя сегодня")
-def featured(lang: Lang) -> dict:
+def featured(lang: Lang, user: UserOrigin) -> dict:
     """До 16:00 — спокойный рабочий день, позже — спокойный вечер вдвоём."""
-    scenario = _planner(lang).featured(clock.now())
+    scenario = _planner(lang, user).featured(clock.now())
     if not scenario["stops"]:
         raise not_found("В каталоге пока нет мест для плана")
     return scenario
