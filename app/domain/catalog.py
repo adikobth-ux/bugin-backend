@@ -1,41 +1,75 @@
-"""Места и события на нужном языке — перенос ``MockPlacesRepository`` и ``MockEventsRepository``.
+"""Каталог: места и события из хранилища на нужном языке, в формате контракта.
 
-Данные строит ``catalog_data`` от текущей даты (события «сегодня», «в субботу»),
-поэтому снимок кэшируется по паре (язык, дата) и пересобирается с новым днём.
-Все функции возвращают dict в формате контракта (``docs/api.md``); вызывающий
-код их не меняет — это общие объекты кэша.
+Хранилище отдаёт двуязычные документы; каталог выбирает язык, достраивает
+вычисляемые поля (расстояние, время на такси, уровень цен, полные ссылки на фото)
+и прячет скрытые записи. Снимок кэшируется и перечитывается, когда хранилище
+изменилось (``Store.revision``) или прошло ``CACHE_SECONDS``.
+
+Возвращаемые dict — общие объекты кэша: вызывающий код их не меняет.
 """
 
 import threading
+import time
 from datetime import date, datetime
 
-from app.domain import catalog_data
+from app.domain import geo
+from app.domain.i18n import localize
+from app.storage.base import Store
 
 EVENT_DAYS = ("today", "tomorrow", "weekend", "date")
 
-_lock = threading.Lock()
-_cache: dict[tuple[str, date], tuple[list[dict], list[dict]]] = {}
+# Страховка на случай правок в обход этого процесса (второй экземпляр сервера).
+CACHE_SECONDS = 600
+
+IMAGE_PATH = "/v1/images/"
+
+PLACE_DEFAULTS: dict = {
+    "subtitle": "",
+    "description": "",
+    "categoryDetail": "",
+    "address": "",
+    "phone": "",
+    "rating": 0.0,
+    "reviewsCount": 0,
+    "averageCheck": 0,
+    "openingHours": {"opensAt": 0, "closesAt": 1440},
+    "photos": [],
+    "tags": [],
+    "amenities": [],
+    "bookingType": "none",
+    "bookingUrl": None,
+    "pitch": "",
+    "goodFor": [],
+    "vibes": [],
+    "reviews": [],
+}
+
+EVENT_DEFAULTS: dict = {
+    "subtitle": "",
+    "description": "",
+    "durationMinutes": 120,
+    "venueName": "",
+    "address": "",
+    "image": "",
+    "tags": [],
+    "ageLimit": 0,
+    "tickets": [],
+    "pitch": "",
+    "reasons": [],
+    "occasions": [],
+    "vibes": [],
+    "venuePlaceId": None,
+    "ticketUrl": None,
+    "isFeatured": False,
+}
 
 
-def _snapshot(lang: str, now: datetime) -> tuple[list[dict], list[dict]]:
-    key = (lang, now.date())
-    with _lock:
-        snapshot = _cache.get(key)
-        if snapshot is None:
-            # Вчерашние снимки больше не нужны.
-            for old in [k for k in _cache if k[1] != key[1]]:
-                del _cache[old]
-            snapshot = (catalog_data.places(lang, now), catalog_data.events(lang, now))
-            _cache[key] = snapshot
-        return snapshot
-
-
-def places(lang: str, now: datetime) -> list[dict]:
-    return _snapshot(lang, now)[0]
-
-
-def events(lang: str, now: datetime) -> list[dict]:
-    return _snapshot(lang, now)[1]
+def price_level(average_check: int) -> int:
+    """Уровень цен по среднему чеку: ₸ до 3 000, ₸₸ до 7 000, ₸₸₸ до 15 000, дальше ₸₸₸₸."""
+    for level, limit in ((1, 3000), (2, 7000), (3, 15000)):
+        if average_check <= limit:
+            return level
+    return 4
 
 
 def starts_at(event: dict) -> datetime:
@@ -48,51 +82,6 @@ def day_diff(a: datetime | date, b: datetime | date) -> int:
     a_day = a.date() if isinstance(a, datetime) else a
     b_day = b.date() if isinstance(b, datetime) else b
     return (a_day - b_day).days
-
-
-def _find(items: list[dict], item_id: str) -> dict | None:
-    for item in items:
-        if item["id"] == item_id:
-            return item
-    return None
-
-
-def _by_ids(items: list[dict], ids: list[str]) -> list[dict]:
-    result = []
-    for item_id in ids:
-        item = _find(items, item_id)
-        if item is not None:
-            result.append(item)
-    return result
-
-
-# ---------- Места ----------
-
-
-def place(lang: str, now: datetime, place_id: str) -> dict | None:
-    return _find(places(lang, now), place_id)
-
-
-def places_by_ids(lang: str, now: datetime, ids: list[str]) -> list[dict]:
-    """Места в порядке ``ids``; неизвестные пропускаются."""
-    return _by_ids(places(lang, now), ids)
-
-
-def nearby(lang: str, now: datetime, limit: int = 6) -> list[dict]:
-    """Блок «Сейчас рядом»: порядок ``NEARBY_ORDER``."""
-    return places_by_ids(lang, now, list(catalog_data.NEARBY_ORDER))[: max(limit, 0)]
-
-
-# ---------- События ----------
-
-
-def event(lang: str, now: datetime, event_id: str) -> dict | None:
-    return _find(events(lang, now), event_id)
-
-
-def events_by_ids(lang: str, now: datetime, ids: list[str]) -> list[dict]:
-    """События в порядке ``ids``; неизвестные пропускаются."""
-    return _by_ids(events(lang, now), ids)
 
 
 def matches_day(item: dict, day: str, on_date: date | None, now: datetime) -> bool:
@@ -112,36 +101,177 @@ def matches_day(item: dict, day: str, on_date: date | None, now: datetime) -> bo
     return False
 
 
-def events_for_day(
-    lang: str,
-    now: datetime,
-    day: str,
-    on_date: date | None = None,
-    category: str | None = None,
-) -> list[dict]:
-    """Афиша: события дня (и категории), по времени начала."""
-    result = [
-        e
-        for e in events(lang, now)
-        if matches_day(e, day, on_date, now) and (category is None or e["category"] == category)
-    ]
-    return sorted(result, key=starts_at)
+def _find(items: list[dict], item_id: str) -> dict | None:
+    for item in items:
+        if item["id"] == item_id:
+            return item
+    return None
 
 
-def featured_events(lang: str, now: datetime) -> list[dict]:
-    """``isFeatured`` в ближайшие 7 дней, в порядке каталога."""
-    return [
-        e for e in events(lang, now) if e["isFeatured"] and 0 <= day_diff(starts_at(e), now) < 7
-    ]
+def _by_ids(items: list[dict], ids: list[str]) -> list[dict]:
+    result = []
+    for item_id in ids:
+        item = _find(items, item_id)
+        if item is not None:
+            result.append(item)
+    return result
 
 
-def similar_events(lang: str, now: datetime, event_id: str, limit: int = 4) -> list[dict]:
-    """Сначала той же категории, затем по времени; без самого события."""
-    source = event(lang, now, event_id)
-    others = [e for e in events(lang, now) if e["id"] != event_id]
+class Catalog:
+    def __init__(
+        self,
+        store: Store,
+        *,
+        public_url: str = "",
+        origin: tuple[float, float] = geo.ASTANA_CENTER,
+    ) -> None:
+        self.store = store
+        self.public_url = public_url.rstrip("/")
+        self.origin = origin
+        self._lock = threading.Lock()
+        self._raw: tuple[list[dict], list[dict]] = ([], [])
+        self._by_lang: dict[str, tuple[list[dict], list[dict]]] = {}
+        self._revision = -1
+        self._loaded_at = 0.0
 
-    def key(e: dict) -> tuple[int, datetime]:
-        same = source is not None and e["category"] == source["category"]
-        return (0 if same else 1, starts_at(e))
+    # ---------- Снимок ----------
 
-    return sorted(others, key=key)[: max(limit, 0)]
+    def _snapshot(self, lang: str) -> tuple[list[dict], list[dict]]:
+        with self._lock:
+            revision = self.store.revision
+            if revision != self._revision or time.monotonic() - self._loaded_at > CACHE_SECONDS:
+                self._raw = (
+                    [r.doc for r in self.store.records("place") if r.published],
+                    [r.doc for r in self.store.records("event") if r.published],
+                )
+                self._by_lang = {}
+                self._revision = revision
+                self._loaded_at = time.monotonic()
+            snapshot = self._by_lang.get(lang)
+            if snapshot is None:
+                places, events = self._raw
+                place_ids = {doc.get("id") for doc in places}
+                snapshot = (
+                    [self._place(doc, lang) for doc in places],
+                    [self._event(doc, lang, place_ids) for doc in events],
+                )
+                self._by_lang[lang] = snapshot
+            return snapshot
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._revision = -1
+
+    def image_url(self, value: str) -> str:
+        """``/v1/images/…`` → полная ссылка; ассеты приложения и чужие ссылки — как есть."""
+        if value.startswith(IMAGE_PATH) and self.public_url:
+            return self.public_url + value
+        return value
+
+    def _location(self, doc: dict) -> tuple[float, float]:
+        return geo.point(doc.get("location")) or self.origin
+
+    def _place(self, doc: dict, lang: str) -> dict:
+        localized = localize(doc, lang)
+        place = {**PLACE_DEFAULTS, **{k: v for k, v in localized.items() if not k.startswith("_")}}
+        lat, lng = self._location(doc)
+        place["location"] = {"lat": lat, "lng": lng}
+        # У тестовых мест расстояние задано в документе, у настоящих — считаем.
+        if "distanceKm" not in doc:
+            km = geo.distance_km(self.origin, (lat, lng))
+            place["distanceKm"] = geo.rounded_km(km)
+            place["taxiMinutes"] = geo.taxi_minutes(km)
+        place.setdefault("taxiMinutes", geo.taxi_minutes(place["distanceKm"]))
+        if "priceLevel" not in doc:
+            place["priceLevel"] = price_level(place["averageCheck"])
+        place["photos"] = [self.image_url(photo) for photo in place["photos"]]
+        return place
+
+    def _event(self, doc: dict, lang: str, place_ids: set) -> dict:
+        localized = localize(doc, lang)
+        event = {**EVENT_DEFAULTS, **{k: v for k, v in localized.items() if not k.startswith("_")}}
+        # Площадку удалили или скрыли — ссылку на неё не отдаём, в приложении была бы пустая страница.
+        if event["venuePlaceId"] not in place_ids:
+            event["venuePlaceId"] = None
+        lat, lng = self._location(doc)
+        event["location"] = {"lat": lat, "lng": lng}
+        if "distanceKm" not in doc:
+            event["distanceKm"] = geo.rounded_km(geo.distance_km(self.origin, (lat, lng)))
+        if "priceFrom" not in doc:
+            prices = [t["price"] for t in event["tickets"] if isinstance(t.get("price"), int)]
+            event["priceFrom"] = min(prices) if prices else 0
+        event["image"] = self.image_url(event["image"] or "")
+        return event
+
+    # ---------- Места ----------
+
+    def places(self, lang: str) -> list[dict]:
+        return self._snapshot(lang)[0]
+
+    def place(self, lang: str, place_id: str) -> dict | None:
+        return _find(self.places(lang), place_id)
+
+    def places_by_ids(self, lang: str, ids: list[str]) -> list[dict]:
+        """Места в порядке ``ids``; неизвестные и скрытые пропускаются."""
+        return _by_ids(self.places(lang), ids)
+
+    def nearby(self, lang: str, limit: int = 6, origin: tuple[float, float] | None = None) -> list[dict]:
+        """Блок «Сейчас рядом»: ближайшие к ``origin`` (нет — к центру города)."""
+        places = self.places(lang)
+        if origin is not None:
+            places = [self._moved(p, origin) for p in places]
+        return sorted(places, key=lambda p: p["distanceKm"])[: max(limit, 0)]
+
+    @staticmethod
+    def _moved(place: dict, origin: tuple[float, float]) -> dict:
+        km = geo.distance_km(origin, (place["location"]["lat"], place["location"]["lng"]))
+        return {**place, "distanceKm": geo.rounded_km(km), "taxiMinutes": geo.taxi_minutes(km)}
+
+    # ---------- События ----------
+
+    def events(self, lang: str) -> list[dict]:
+        return self._snapshot(lang)[1]
+
+    def event(self, lang: str, event_id: str) -> dict | None:
+        return _find(self.events(lang), event_id)
+
+    def events_by_ids(self, lang: str, ids: list[str]) -> list[dict]:
+        """События в порядке ``ids``; неизвестные и скрытые пропускаются."""
+        return _by_ids(self.events(lang), ids)
+
+    def events_for_day(
+        self,
+        lang: str,
+        now: datetime,
+        day: str,
+        on_date: date | None = None,
+        category: str | None = None,
+    ) -> list[dict]:
+        """Афиша: события дня (и категории), по времени начала."""
+        result = [
+            e
+            for e in self.events(lang)
+            if matches_day(e, day, on_date, now) and (category is None or e["category"] == category)
+        ]
+        return sorted(result, key=starts_at)
+
+    def featured_events(self, lang: str, now: datetime) -> list[dict]:
+        """``isFeatured`` в ближайшие 7 дней, в порядке каталога."""
+        return [
+            e for e in self.events(lang) if e["isFeatured"] and 0 <= day_diff(starts_at(e), now) < 7
+        ]
+
+    def similar_events(self, lang: str, now: datetime, event_id: str, limit: int = 4) -> list[dict]:
+        """Сначала той же категории, затем по времени; без самого события и прошедших."""
+        source = self.event(lang, event_id)
+        others = [
+            e
+            for e in self.events(lang)
+            if e["id"] != event_id and day_diff(starts_at(e), now) >= 0
+        ]
+
+        def key(e: dict) -> tuple[int, datetime]:
+            same = source is not None and e["category"] == source["category"]
+            return (0 if same else 1, starts_at(e))
+
+        return sorted(others, key=key)[: max(limit, 0)]

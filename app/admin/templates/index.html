@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+{% if msg %}<div class="notice ok">{{ msg }}</div>{% endif %}
+<h1>Каталог Астаны</h1>
+<div class="stats">
+  <a class="stat" href="{{ base }}/places"><b>{{ o.places }}</b>мест{% if o.places_hidden %}
+    <span class="muted small">· скрыто {{ o.places_hidden }}</span>{% endif %}</a>
+  <a class="stat" href="{{ base }}/events"><b>{{ o.events_upcoming }}</b>предстоящих событий{% if o.events_past %}
+    <span class="muted small">· прошло {{ o.events_past }}</span>{% endif %}</a>
+</div>
+<div class="row" style="margin-bottom:14px">
+  <a class="btn primary" href="{{ base }}/places/new">+ Место</a>
+  <a class="btn primary" href="{{ base }}/events/new">+ Событие</a>
+</div>
+{% if o.demo %}
+<div class="card">
+  <h2>Тестовые данные</h2>
+  <p class="muted">Тестовых записей из прототипа: {{ o.demo }}. Они помечены «тест». Когда появятся свои места
+  и события — удалите их одной кнопкой. Записи, которые вы правили, уже ваши и не удалятся.</p>
+  <form method="post" action="{{ base }}/demo/delete"
+        onsubmit="return confirm('Удалить все тестовые записи? Вернуть их будет нельзя.')">
+    <button class="btn danger" type="submit">Удалить тестовые</button>
+  </form>
+</div>
+{% endif %}
+<div class="card small muted">
+  Изменения видны в приложении сразу после сохранения — достаточно обновить экран.
+  Скрытые записи хранятся здесь, но в приложении не показываются.
+</div>
+{% endblock %}

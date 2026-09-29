@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter
 
-from app import clock
-from app.api.deps import Lang, bad_request
+from app import clock, services
+from app.api.deps import Lang, bad_request, not_found
 from app.api.schemas import (
     ERROR_RESPONSES,
     AlternativesBody,
@@ -13,14 +13,13 @@ from app.api.schemas import (
     ReplaceBody,
     Scenario,
 )
-from app.domain import catalog
 from app.domain.planner import EveningPlanner, request_from_json, scenario_from_json, stop_from_json
 
 router = APIRouter(prefix="/evening", tags=["Вечер"], responses=ERROR_RESPONSES)
 
 
 def _planner(lang: str) -> EveningPlanner:
-    return EveningPlanner(lang, catalog.places(lang, clock.now()))
+    return EveningPlanner(lang, services.catalog().places(lang))
 
 
 @router.post("/plan", response_model=Scenario, summary="Собрать план")
@@ -53,7 +52,10 @@ def replace(body: ReplaceBody, lang: Lang) -> dict:
 @router.get("/featured", response_model=Scenario, summary="Для тебя сегодня")
 def featured(lang: Lang) -> dict:
     """До 16:00 — спокойный рабочий день, позже — спокойный вечер вдвоём."""
-    return _planner(lang).featured(clock.now())
+    scenario = _planner(lang).featured(clock.now())
+    if not scenario["stops"]:
+        raise not_found("В каталоге пока нет мест для плана")
+    return scenario
 
 
 @router.post("/localize", response_model=Scenario, summary="Перевести план")

@@ -8,7 +8,8 @@ import random
 import unittest
 from datetime import datetime
 
-from app.domain import catalog, catalog_data, texts
+from app.domain import catalog_data, texts
+from app.domain.catalog import Catalog, starts_at
 from app.domain.planner import (
     ACTIVE_SATURDAY_ID,
     WORK_DAY_ID,
@@ -19,10 +20,22 @@ from app.domain.planner import (
     total_cost,
 )
 from app.domain.search import SearchService, parse
+from app.storage import demo
+from app.storage.memory import MemoryStore
 
 # Вторник, полдень: ближайшая суббота — 3 октября, воскресенье — 4 октября.
 NOW = datetime(2026, 9, 29, 12, 0)
 EVENING = datetime(2026, 9, 29, 18, 30)
+
+
+def demo_catalog(now: datetime = NOW) -> Catalog:
+    """Каталог с тестовыми данными прототипа, как на свежем сервере."""
+    store = MemoryStore()
+    demo.seed(store, now)
+    return Catalog(store)
+
+
+catalog = demo_catalog()
 
 
 def params(intent: dict) -> dict:
@@ -48,31 +61,40 @@ class TextsTest(unittest.TestCase):
 class CatalogTest(unittest.TestCase):
     def test_eight_places_and_events_on_both_languages(self):
         for lang in ("ru", "kk"):
-            self.assertEqual(len(catalog.places(lang, NOW)), 8)
-            self.assertEqual(len(catalog.events(lang, NOW)), 8)
+            self.assertEqual(len(catalog.places(lang)), 8)
+            self.assertEqual(len(catalog.events(lang)), 8)
 
     def test_ids_do_not_depend_on_language(self):
-        ru = [p["id"] for p in catalog.places("ru", NOW)]
-        kk = [p["id"] for p in catalog.places("kk", NOW)]
+        ru = [p["id"] for p in catalog.places("ru")]
+        kk = [p["id"] for p in catalog.places("kk")]
         self.assertEqual(ru, kk)
         self.assertNotEqual(
-            catalog.place("ru", NOW, catalog_data.ESIL_EMBANKMENT)["name"],
-            catalog.place("kk", NOW, catalog_data.ESIL_EMBANKMENT)["name"],
+            catalog.place("ru", catalog_data.ESIL_EMBANKMENT)["name"],
+            catalog.place("kk", catalog_data.ESIL_EMBANKMENT)["name"],
         )
 
-    def test_nearby_order_and_limit(self):
-        ids = [p["id"] for p in catalog.nearby("ru", NOW, 3)]
-        self.assertEqual(ids, catalog_data.NEARBY_ORDER[:3])
+    def test_nearby_is_closest_first(self):
+        nearby = catalog.nearby("ru", 3)
+        self.assertEqual(len(nearby), 3)
+        distances = [p["distanceKm"] for p in nearby]
+        self.assertEqual(distances, sorted(distances))
+        self.assertEqual(nearby[0]["id"], catalog_data.ESIL_EMBANKMENT)
+
+    def test_nearby_from_the_user_location(self):
+        gallery = catalog.place("ru", catalog_data.BASTAU_GALLERY)["location"]
+        first = catalog.nearby("ru", 1, origin=(gallery["lat"], gallery["lng"]))[0]
+        self.assertEqual(first["id"], catalog_data.BASTAU_GALLERY)
+        self.assertEqual(first["distanceKm"], 0.0)
 
     def test_by_ids_keeps_order_and_skips_unknown(self):
         ids = [catalog_data.SKY_LOUNGE, "nope", catalog_data.THE_GARDEN]
-        found = [p["id"] for p in catalog.places_by_ids("ru", NOW, ids)]
+        found = [p["id"] for p in catalog.places_by_ids("ru", ids)]
         self.assertEqual(found, [catalog_data.SKY_LOUNGE, catalog_data.THE_GARDEN])
 
     def test_event_days(self):
         today = [e["id"] for e in catalog.events_for_day("ru", NOW, "today")]
         self.assertIn(catalog_data.ROOFTOP_ACOUSTIC, today)
-        starts = [catalog.starts_at(e) for e in catalog.events_for_day("ru", NOW, "today")]
+        starts = [starts_at(e) for e in catalog.events_for_day("ru", NOW, "today")]
         self.assertEqual(starts, sorted(starts))
         weekend = [e["id"] for e in catalog.events_for_day("ru", NOW, "weekend")]
         self.assertEqual(weekend, [catalog_data.NEON_NIGHTS, catalog_data.SEAGULL])
@@ -80,15 +102,15 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(tomorrow, {catalog_data.JAZZ, catalog_data.STANDUP})
 
     def test_dates_are_local_without_offset(self):
-        neon = catalog.event("ru", NOW, catalog_data.NEON_NIGHTS)
+        neon = catalog.event("ru", catalog_data.NEON_NIGHTS)
         self.assertEqual(neon["startsAt"], "2026-10-03T20:00:00")
 
     def test_tickets_are_links_to_operators(self):
-        for e in catalog.events("ru", NOW):
+        for e in catalog.events("ru"):
             self.assertTrue(
                 e["ticketUrl"].startswith(("https://ticketon.kz/", "https://kino.kz/")), e["id"]
             )
-        cinema = catalog.place("ru", NOW, catalog_data.LUNA_CINEMA)
+        cinema = catalog.place("ru", catalog_data.LUNA_CINEMA)
         self.assertEqual(cinema["bookingUrl"], "https://kino.kz/ru/movie")
 
     def test_similar_events_first_same_category(self):
@@ -128,8 +150,8 @@ class SearchTest(unittest.TestCase):
 
     def test_ranking_respects_budget_and_explains_in_language(self):
         intent = parse("свидание до 5000", NOW)
-        ru = SearchService("ru", catalog.places("ru", NOW), catalog.events("ru", NOW))
-        kk = SearchService("kk", catalog.places("kk", NOW), catalog.events("kk", NOW))
+        ru = SearchService("ru", catalog.places("ru"), catalog.events("ru"))
+        kk = SearchService("kk", catalog.places("kk"), catalog.events("kk"))
         items = ru.rank(intent, NOW)
         self.assertTrue(items)
         for item in items:
@@ -143,22 +165,22 @@ class SearchTest(unittest.TestCase):
         self.assertNotEqual(kk_items[0]["reason"], items[0]["reason"])
 
     def test_ranking_is_sorted_and_has_no_parks(self):
-        service = SearchService("ru", catalog.places("ru", NOW), catalog.events("ru", NOW))
+        service = SearchService("ru", catalog.places("ru"), catalog.events("ru"))
         items = service.rank({"query": "", "params": []}, NOW)
         scores = [i["score"] for i in items]
         self.assertEqual(scores, sorted(scores, reverse=True))
         self.assertNotIn("park", [i["place"]["category"] for i in items if i["place"]])
 
     def test_surprise_picks_from_ranking(self):
-        service = SearchService("ru", catalog.places("ru", NOW), catalog.events("ru", NOW))
+        service = SearchService("ru", catalog.places("ru"), catalog.events("ru"))
         item = service.surprise(NOW, random.Random(1))
         self.assertIn(item["kind"], ("place", "event"))
 
 
 class PlannerTest(unittest.TestCase):
     def setUp(self):
-        self.ru = EveningPlanner("ru", catalog.places("ru", NOW))
-        self.kk = EveningPlanner("kk", catalog.places("kk", NOW))
+        self.ru = EveningPlanner("ru", catalog.places("ru"))
+        self.kk = EveningPlanner("kk", catalog.places("kk"))
 
     def test_plan_fits_budget_for_every_mood(self):
         for budget in (5000, 10000, 15000):

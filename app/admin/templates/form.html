@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% set nav = kind.path %}
+{% block title %}{{ title }}{% endblock %}
+
+{% macro help_and_error(f) -%}
+  {% if f.help %}<p class="help">{{ f.help }}</p>{% endif %}
+  {% if errors.get(f.key) %}<p class="error">{{ errors.get(f.key) }}</p>{% endif %}
+{%- endmacro %}
+
+{% macro label(f, for_id=None) -%}
+  {# Поле, которое одно в разделе и называется так же, подписи не требует. #}
+  {% if f.label != f.section %}<label {% if for_id %}for="{{ for_id }}"{% endif %}>{{ f.label }}{% if f.required %} <span class="req">*</span>{% endif %}</label>{% endif %}
+{%- endmacro %}
+
+{% block content %}
+<h1>{{ title }}</h1>
+{% if copy %}<div class="notice warn">Копия события: поменяйте дату и сохраните — появится новое событие.</div>{% endif %}
+{% if demo %}<div class="notice warn">Тестовая запись из прототипа. Если сохраните правки — станет обычной
+  и не удалится кнопкой «Удалить тестовые».</div>{% endif %}
+{% if not errors %}<p class="muted small">Поля <b>ҚАЗ</b> — текст на казахском. Если оставить пустым, в казахской версии
+  приложения покажем русский. <span class="req">*</span> — обязательно.</p>{% endif %}
+{% if errors %}<div class="notice err">Проверьте поля, отмеченные красным.
+  {% if uploads_lost %}Выбранные фото не сохранились — выберите их снова.{% endif %}</div>{% endif %}
+
+<form id="item" method="post" enctype="multipart/form-data"
+      action="{{ base }}/{{ kind.path }}/{{ (item_id | urlencode) if item_id else 'new' }}">
+{% for section, fields in sections %}
+  <section class="card">
+    <h2>{{ section }}</h2>
+    {% for f in fields %}
+    {% set k = f.key %}
+    <div class="field {{ 'has-error' if errors.get(k) }}">
+    {% if f.kind in ('text_i18n', 'list_i18n') %}
+      {{ label(f, 'f-' ~ k) }}
+      <input id="f-{{ k }}" name="{{ k }}.ru" value="{{ v[k ~ '.ru'] }}" placeholder="{{ f.placeholder }}"
+             {% if f.required %}required{% endif %}>
+      <div class="kk"><span class="lang">ҚАЗ</span>
+        <input name="{{ k }}.kk" value="{{ v[k ~ '.kk'] }}" placeholder="по-казахски" aria-label="{{ f.label }} на казахском"></div>
+    {% elif f.kind in ('area_i18n', 'lines_i18n') %}
+      {{ label(f, 'f-' ~ k) }}
+      <textarea id="f-{{ k }}" name="{{ k }}.ru" placeholder="{{ f.placeholder }}">{{ v[k ~ '.ru'] }}</textarea>
+      <div class="kk"><span class="lang">ҚАЗ</span>
+        <textarea name="{{ k }}.kk" placeholder="по-казахски" aria-label="{{ f.label }} на казахском">{{ v[k ~ '.kk'] }}</textarea></div>
+    {% elif f.kind == 'text' %}
+      {{ label(f, 'f-' ~ k) }}
+      <input id="f-{{ k }}" name="{{ k }}" value="{{ v[k] }}" placeholder="{{ f.placeholder }}" {% if k == 'phone' %}type="tel"{% endif %}>
+    {% elif f.kind == 'url' %}
+      {{ label(f, 'f-' ~ k) }}
+      <input id="f-{{ k }}" name="{{ k }}" type="url" inputmode="url" value="{{ v[k] }}" placeholder="{{ f.placeholder }}">
+    {% elif f.kind in ('int', 'float') %}
+      {{ label(f, 'f-' ~ k) }}
+      <input id="f-{{ k }}" name="{{ k }}" inputmode="{{ 'numeric' if f.kind == 'int' else 'decimal' }}" value="{{ v[k] }}"
+             placeholder="{{ f.placeholder }}" {% if f.required %}required{% endif %}>
+    {% elif f.kind == 'select' %}
+      {{ label(f, 'f-' ~ k) }}
+      <select id="f-{{ k }}" name="{{ k }}" {% if f.required %}required{% endif %}>
+        {% if not f.default %}<option value="">— выберите —</option>{% endif %}
+        {% for code, text in f.options %}<option value="{{ code }}" {{ 'selected' if v[k] == code }}>{{ text }}</option>{% endfor %}
+      </select>
+    {% elif f.kind == 'place_ref' %}
+      {{ label(f, 'f-' ~ k) }}
+      <select id="f-{{ k }}" name="{{ k }}">
+        <option value="">— нет в каталоге —</option>
+        {% for code, text in place_options %}<option value="{{ code }}" {{ 'selected' if v[k] == code }}>{{ text }}</option>{% endfor %}
+      </select>
+    {% elif f.kind == 'multi' %}
+      <span class="label">{{ f.label }}</span>
+      <div class="chips">
+        {% for code, text in f.options %}
+        <label><input type="checkbox" name="{{ k }}" value="{{ code }}" {{ 'checked' if code in v[k] }}> {{ text }}</label>
+        {% endfor %}
+      </div>
+    {% elif f.kind == 'bool' %}
+      <label class="check"><input type="checkbox" name="{{ k }}" {{ 'checked' if v[k] }}> {{ f.label }}</label>
+    {% elif f.kind == 'hours' %}
+      <span class="label">{{ f.label }}{% if f.required %} <span class="req">*</span>{% endif %}</span>
+      <div class="row">
+        <input type="time" name="{{ k }}.opens" value="{{ v[k ~ '.opens'] }}" aria-label="Открывается">
+        <input type="time" name="{{ k }}.closes" value="{{ v[k ~ '.closes'] }}" aria-label="Закрывается">
+      </div>
+      <p class="help"><label class="check"><input type="checkbox" name="{{ k }}.always" {{ 'checked' if v[k ~ '.always'] }}> Круглосуточно</label></p>
+      <p class="help">Если закрывается после полуночи — укажите, например, 10:00 и 02:00.</p>
+    {% elif f.kind == 'datetime' %}
+      {{ label(f, 'f-' ~ k) }}
+      <input id="f-{{ k }}" type="datetime-local" name="{{ k }}" value="{{ v[k] }}" {% if f.required %}required{% endif %}>
+    {% elif f.kind == 'geo' %}
+      {{ label(f, 'f-map') }}
+      <input id="f-map" name="_mapUrl" type="url" inputmode="url" value="{{ v['_mapUrl'] }}"
+             placeholder="https://2gis.kz/astana/… или https://maps.app.goo.gl/…">
+      {% set lat, lng = v[k ~ '.lat'], v[k ~ '.lng'] %}
+      <details {{ 'open' if errors.get(k) }}>
+        <summary>{% if lat and lng %}Координаты: {{ lat }}, {{ lng }}{% else %}Ввести координаты вручную{% endif %}</summary>
+        <div class="row" style="margin-top:8px">
+          <input name="{{ k }}.lat" inputmode="decimal" value="{{ lat }}" placeholder="широта, 51.128" aria-label="Широта">
+          <input name="{{ k }}.lng" inputmode="decimal" value="{{ lng }}" placeholder="долгота, 71.430" aria-label="Долгота">
+        </div>
+      </details>
+      {% if lat and lng %}<p class="help"><a href="https://www.google.com/maps?q={{ lat }},{{ lng }}" target="_blank" rel="noopener">Проверить точку на карте</a></p>{% endif %}
+    {% elif f.kind == 'amenities' %}
+      {% for code, name, example in amenities %}
+      <div class="amenity">
+        <span class="name">{{ name }}</span>
+        <div class="row">
+          <input name="{{ k }}.{{ code }}.ru" value="{{ v[k ~ '.' ~ code ~ '.ru'] }}" placeholder="{{ example }}" aria-label="{{ name }}">
+          <input name="{{ k }}.{{ code }}.kk" value="{{ v[k ~ '.' ~ code ~ '.kk'] }}" placeholder="ҚАЗ" aria-label="{{ name }} на казахском">
+        </div>
+      </div>
+      {% endfor %}
+    {% elif f.kind == 'tickets' %}
+      {{ label(f, 'f-' ~ k) }}
+      <textarea id="f-{{ k }}" name="{{ k }}.ru" placeholder="Танцпартер — 12000&#10;VIP — 30000">{{ v[k ~ '.ru'] }}</textarea>
+      <div class="kk"><span class="lang">ҚАЗ</span>
+        <textarea name="{{ k }}.kk" placeholder="Би партері&#10;VIP" aria-label="Названия категорий на казахском">{{ v[k ~ '.kk'] }}</textarea></div>
+    {% elif f.kind == 'photos' %}
+      {% if v[k] %}
+      <div class="photos">
+        {% for url in v[k] %}
+        <div class="photo">
+          <input type="hidden" name="{{ k }}.keep" value="{{ url }}">
+          {% if thumb(url) %}<img src="{{ thumb(url) }}" alt="">{% else %}<div class="asset">фото встроено в приложение</div>{% endif %}
+          <div class="opts">
+            <label class="check"><input type="radio" name="{{ k }}.cover" value="{{ url }}" {{ 'checked' if loop.first }}> главное</label>
+            <label class="check"><input type="checkbox" name="{{ k }}.remove" value="{{ url }}"> удалить</label>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <label class="upload"><span class="btn">Добавить фото</span>
+        <input type="file" name="{{ k }}.new" accept="image/*" multiple><span class="count"></span></label>
+    {% elif f.kind == 'image' %}
+      {% if v[k] %}
+      <div class="photos"><div class="photo">
+        {% if thumb(v[k]) %}<img src="{{ thumb(v[k]) }}" alt="">{% else %}<div class="asset">картинка встроена в приложение</div>{% endif %}
+        <div class="opts"><label class="check"><input type="checkbox" name="{{ k }}.remove"> удалить</label></div>
+      </div></div>
+      {% endif %}
+      <label class="upload"><span class="btn">{{ 'Заменить картинку' if v[k] else 'Загрузить картинку' }}</span>
+        <input type="file" name="{{ k }}.new" accept="image/*"><span class="count"></span></label>
+    {% endif %}
+    {{ help_and_error(f) }}
+    </div>
+    {% endfor %}
+  </section>
+{% endfor %}
+
+  <div class="savebar"><div class="inner">
+    <label class="check"><input type="checkbox" name="published" {{ 'checked' if published }}> Показывать в приложении</label>
+    <button class="btn primary" type="submit">Сохранить</button>
+  </div></div>
+</form>
+
+{% if item_id %}
+<div class="row" style="margin-top:8px">
+  {% if kind.code == 'event' %}
+  <a class="btn" href="{{ base }}/events/new?from={{ item_id | urlencode }}">Копировать на другую дату</a>
+  {% endif %}
+  <form method="post" action="{{ base }}/{{ kind.path }}/{{ item_id | urlencode }}/delete"
+        onsubmit='return confirm({{ ("Удалить «" ~ title ~ "»? Вернуть будет нельзя.") | tojson }})'>
+    <button class="btn danger" type="submit" style="width:100%">Удалить</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

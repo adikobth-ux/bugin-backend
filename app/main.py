@@ -1,26 +1,43 @@
-"""Тестовый сервер Bugin (этап 0): приложение FastAPI.
+"""Сервер Bugin: приложение FastAPI.
 
-Запуск: ``uvicorn app.main:app --reload``, документация — ``/docs``.
-Контракт — ``docs/api.md``.
+Запуск: ``uvicorn app.main:app --reload``, документация — ``/docs``, админка — ``/admin``.
+Контракт — ``docs/api.md``. Настройки — переменные окружения (``app/config.py``).
 """
+
+import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app import services
+from app.admin.app import admin_app
 from app.api import evening, events, places, search
-from app.api.schemas import Health
+from app.api.schemas import ERROR_RESPONSES, Health
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    # Подключаемся к базе сразу: неверный DATABASE_URL виден в логе деплоя,
+    # а Render оставляет работать прошлую версию.
+    await run_in_threadpool(services.startup)
+    yield
+
 
 app = FastAPI(
     title="Bugin API",
-    version="0.1.0",
+    version="0.2.0",
     description=(
-        "Тестовый сервер приложения Bugin «Чем заняться сегодня?» (этап 0): "
-        "данные прототипа, без входа и личных данных. Язык ответа — заголовок "
-        "Accept-Language (kk → казахский, иначе русский)."
+        "Сервер приложения Bugin «Чем заняться сегодня?»: места и события Астаны из "
+        "каталога (админка — /admin), AI-поиск и «Собрать мне вечер». Язык ответа — "
+        "заголовок Accept-Language (kk → казахский, иначе русский)."
     ),
+    lifespan=lifespan,
 )
 
 # Веб-версия приложения живёт на другом домене (github.io); cookies не используются.
@@ -34,6 +51,8 @@ app.add_middleware(
 
 for module in (places, events, search, evening):
     app.include_router(module.router, prefix="/v1")
+
+app.mount("/admin", admin_app)
 
 
 # ---------- Ошибки в формате контракта ----------
@@ -91,4 +110,28 @@ async def internal_error(request: Request, exc: Exception) -> JSONResponse:
 
 @app.get("/health", response_model=Health, tags=["Служебное"], summary="Проверка доступности")
 def health() -> dict:
-    return {"status": "ok"}
+    """Без запроса к базе: Render проверяет часто, а Neon должен успевать засыпать."""
+    return {"status": "ok", "storage": services.store().name}
+
+
+_IMAGE_NAME = re.compile(r"^([0-9a-f]{8,32})\.jpg$")
+
+
+@app.get(
+    "/v1/images/{name}",
+    tags=["Служебное"],
+    summary="Фото из админки",
+    response_class=Response,
+    responses={200: {"content": {"image/jpeg": {}}}, **ERROR_RESPONSES},
+)
+def image(name: str) -> Response:
+    """JPEG из каталога. Ссылки не меняются, поэтому кэшируются надолго."""
+    match = _IMAGE_NAME.match(name)
+    stored = services.store().image(match.group(1)) if match else None
+    if stored is None:
+        raise StarletteHTTPException(status_code=404, detail="Фото не найдено")
+    return Response(
+        content=stored.data,
+        media_type=stored.content_type,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )

@@ -17,6 +17,7 @@ except ImportError as error:  # pragma: no cover - локально без за�
         raise  # в CI зависимости обязаны быть: пропуск спрятал бы непроверенный сервер
     raise unittest.SkipTest(f"нет FastAPI: {error}") from error
 
+from app import services
 from app.main import app
 
 CONTRACT = Path(__file__).parent / "contract"
@@ -52,7 +53,7 @@ class ApiTest(unittest.TestCase):
     # ---------- Служебное ----------
 
     def test_health_and_docs(self):
-        self.assertEqual(self.get("/health").json(), {"status": "ok"})
+        self.assertEqual(self.get("/health").json(), {"status": "ok", "storage": "memory"})
         schema = self.get("/openapi.json").json()
         self.assertIn("/v1/search/understand", schema["paths"])
 
@@ -95,6 +96,45 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(garden["name"], "The Garden")
         found = self.get("/v1/places", params={"ids": "sky_lounge,nope,the_garden"}).json()
         self.assertEqual([p["id"] for p in found], ["sky_lounge", "the_garden"])
+
+    def test_nearby_from_user_location(self):
+        gallery = self.get("/v1/places/bastau_gallery").json()["location"]
+        first = self.get(
+            "/v1/places/nearby", params={"limit": 1, "lat": gallery["lat"], "lng": gallery["lng"]}
+        ).json()[0]
+        self.assertEqual((first["id"], first["distanceKm"]), ("bastau_gallery", 0.0))
+        self.assertEqual(self.get("/v1/places/nearby", params={"lat": 91, "lng": 0}).status_code, 422)
+
+    def test_admin_changes_are_served_at_once(self):
+        store = services.store()
+        store.save_image("0123abcd0123abcd", "image/jpeg", b"\xff\xd8test", 1, 1)
+        store.save(
+            "place", "mart",
+            {"name": "Март", "category": "coffeeShop", "address": "пр. Мангилик Ел, 10",
+             "averageCheck": 3500, "photos": ["/v1/images/0123abcd0123abcd.jpg"],
+             "location": {"lat": 51.1282, "lng": 71.4404}},
+            published=True,
+        )
+        try:
+            mart = self.get("/v1/places/mart").json()
+            same_keys(self, mart, sample("place"))
+            self.assertEqual(mart["distanceKm"], 0.7)
+            photo = self.get(mart["photos"][0].replace("http://testserver", ""))
+            self.assertEqual(photo.content, b"\xff\xd8test")
+            self.assertEqual(photo.headers["content-type"], "image/jpeg")
+            self.assertIn("immutable", photo.headers["cache-control"])
+        finally:
+            store.delete("place", "mart")
+        self.assertEqual(self.get("/v1/places/mart").status_code, 404)
+        missing = self.get("/v1/images/ffffffffffffffff.jpg")
+        self.assertEqual(missing.json()["error"]["code"], "not_found")
+        self.assertEqual(self.get("/v1/images/..%2Fx.jpg").status_code, 404)
+
+    def test_admin_is_mounted(self):
+        response = self.get("/admin/login")
+        self.assertIn(response.status_code, (200, 503))
+        self.assertIn("text/html", response.headers["content-type"])
+        self.assertNotIn("/admin/login", self.get("/openapi.json").json()["paths"])
 
     def test_language_from_header(self):
         ru = self.get("/v1/places/esil_embankment").json()

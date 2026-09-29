@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Вход{% endblock %}
+{% block content %}
+<h1>Вход в админку</h1>
+<form class="card" method="post" action="{{ base }}/login?next={{ next | urlencode }}">
+  {% if error %}<div class="notice err">{{ error }}</div>{% endif %}
+  <div class="field">
+    <label for="password">Пароль</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+    <p class="help">Тот, что записан в Render → bugin-api → Environment → ADMIN_PASSWORD.</p>
+  </div>
+  <button class="btn primary" type="submit">Войти</button>
+</form>
+{% endblock %}

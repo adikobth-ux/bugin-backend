@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% set nav = kind.path %}
+{% block title %}{{ kind.many }}{% endblock %}
+{% block content %}
+{% if msg %}<div class="notice ok">{{ msg }}</div>{% endif %}
+<h1>{{ kind.many }}</h1>
+<form class="toolbar" method="get" action="{{ base }}/{{ kind.path }}">
+  <input type="search" name="q" value="{{ q }}" placeholder="Поиск по названию и адресу" aria-label="Поиск">
+  <a class="btn primary" href="{{ base }}/{{ kind.path }}/new">+ Добавить</a>
+</form>
+<div class="card">
+{% if rows %}
+  <ul class="list">
+  {% for row in rows %}
+    <li class="{{ 'past' if row.past }}">
+      <a href="{{ base }}/{{ kind.path }}/{{ row.id | urlencode }}">
+        {% if thumb(row.photo) %}<img class="thumb" src="{{ thumb(row.photo) }}" alt="" loading="lazy">
+        {% else %}<span class="thumb"></span>{% endif %}
+        <span class="text">
+          <span class="name">{{ row.title }}</span>
+          {%- if row.demo %}<span class="badge">тест</span>{% endif %}
+          {%- if not row.published %}<span class="badge hidden">скрыто</span>{% endif %}
+          {%- if row.past %}<span class="badge hidden">прошло</span>{% endif %}
+          <span class="details">{{ row.details }}</span>
+        </span>
+      </a>
+    </li>
+  {% endfor %}
+  </ul>
+{% elif q %}
+  <p class="muted">Ничего не нашлось по запросу «{{ q }}».</p>
+{% else %}
+  <p class="muted">Пока пусто. Нажмите «+ Добавить».</p>
+{% endif %}
+</div>
+{% endblock %}

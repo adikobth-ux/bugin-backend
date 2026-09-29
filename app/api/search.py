@@ -1,8 +1,8 @@
-"""/v1/search — AI-поиск (на этапе 0 — правила по ключевым словам)."""
+"""/v1/search — AI-поиск (пока — правила по ключевым словам)."""
 
 from fastapi import APIRouter
 
-from app import clock
+from app import clock, services
 from app.api.deps import Lang, not_found
 from app.api.schemas import (
     ERROR_RESPONSES,
@@ -11,15 +11,14 @@ from app.api.schemas import (
     SearchIntent,
     UnderstandBody,
 )
-from app.domain import catalog
 from app.domain.search import SearchService, parse
 
 router = APIRouter(prefix="/search", tags=["Поиск"], responses=ERROR_RESPONSES)
 
 
 def _service(lang: str) -> SearchService:
-    now = clock.now()
-    return SearchService(lang, catalog.places(lang, now), catalog.events(lang, now))
+    catalog = services.catalog()
+    return SearchService(lang, catalog.places(lang), catalog.events(lang))
 
 
 @router.post("/understand", response_model=SearchIntent, summary="Понять запрос")

@@ -211,6 +211,7 @@ class LocalizeBody(ApiModel):
 
 class Health(ApiModel):
     status: str
+    storage: str = Field(default="memory", description="postgres — база подключена, memory — нет")
 
 
 class ErrorInfo(ApiModel):

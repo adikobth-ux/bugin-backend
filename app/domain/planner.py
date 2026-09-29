@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from typing import NamedTuple
 
-from app.domain import catalog_data as data
+from app.domain import geo
 from app.domain.texts import dart_round, kind_label, plan_title, t
 
 COMPANIES = ("solo", "pair", "friends", "family")
@@ -43,34 +43,44 @@ _TEMPLATES: dict[str, list[str]] = {
     "culture": ["culture", "walk", "dinner"],
 }
 
-_CANDIDATES: dict[str, list[Candidate]] = {
-    "coffee": [
-        Candidate(data.COFFEE_LAB, "coffee", 60),
-        Candidate(data.THE_GARDEN, "coffee", 60),
-    ],
-    "walk": [
-        Candidate(data.ESIL_EMBANKMENT, "walk", 45),
-    ],
-    "dinner": [
-        Candidate(data.THE_GARDEN, "dinner", 105),
-        Candidate(data.SKY_LOUNGE, "dinner_view", 105),
-    ],
-    "activity": [
-        Candidate(data.GALAXY_BOWLING, "bowling", 120),
-        Candidate(data.LUNA_CINEMA, "cinema", 150),
-    ],
-    "culture": [
-        Candidate(data.BASTAU_GALLERY, "exhibition", 75),
-        Candidate(data.LUNA_CINEMA, "cinema", 150),
-    ],
-    "novelty": [
-        Candidate(data.HOLST_STUDIO, "workshop", 120),
-        Candidate(data.GALAXY_BOWLING, "bowling", 120),
-    ],
-    "work": [
-        Candidate(data.COFFEE_LAB, "coffee_work", 240, cost=5000),
-    ],
+# Кто подходит на роль в плане: (категория места, код занятия, минуты, ярус).
+# Внутри роли места идут по ярусу, затем по рейтингу и близости — планировщик
+# предпочитает первых. Так план собирается из любого каталога, не из списка id.
+_ROLE_OPTIONS: dict[str, list[tuple[str, str, int, int]]] = {
+    "coffee": [("coffeeShop", "coffee", 60, 0), ("cafe", "coffee", 60, 1)],
+    "walk": [("park", "walk", 45, 0)],
+    "dinner": [("cafe", "dinner", 105, 0), ("restaurant", "dinner", 105, 0)],
+    "activity": [("bowling", "bowling", 120, 0), ("cinema", "cinema", 150, 0)],
+    "culture": [("gallery", "exhibition", 75, 0), ("cinema", "cinema", 150, 1)],
+    "novelty": [("studio", "workshop", 120, 0), ("bowling", "bowling", 120, 1)],
+    "work": [("coffeeShop", "coffee_work", 240, 0), ("cafe", "coffee_work", 240, 1)],
 }
+
+# Сколько вариантов на роль перебирать: 3 роли × 5 вариантов — мгновенно.
+MAX_PER_ROLE = 5
+
+# Рабочий день: кроме чека — ещё один напиток за четыре часа.
+_WORK_EXTRA = 500
+
+
+def _role_candidates(role: str, places: list[dict]) -> list[Candidate]:
+    options = {category: (kind, minutes, tier) for category, kind, minutes, tier in _ROLE_OPTIONS.get(role, [])}
+    ranked = []
+    for place in places:
+        option = options.get(place["category"])
+        if option is None:
+            continue
+        kind, minutes, tier = option
+        amenities = {a.get("type") for a in place.get("amenities") or []}
+        if role == "work" and not {"wifi", "sockets"} <= amenities:
+            continue
+        if kind == "dinner" and place["category"] == "restaurant" and "beautiful" in place["vibes"]:
+            kind = "dinner_view"
+        cost = place["averageCheck"] + _WORK_EXTRA if role == "work" else None
+        ranked.append(((tier, -place["rating"], place["distanceKm"]), Candidate(place["id"], kind, minutes, cost)))
+    ranked.sort(key=lambda item: item[0])
+    return [candidate for _, candidate in ranked[:MAX_PER_ROLE]]
+
 
 _NO_CINEMA_PHRASES = ("без кино", "киносыз", "кино емес", "кинодан басқа", "кино керек емес")
 
@@ -208,6 +218,7 @@ class EveningPlanner:
     def __init__(self, lang: str, places: list[dict]):
         self.lang = lang
         self._places = {p["id"]: p for p in places}
+        self._candidates = {role: _role_candidates(role, places) for role in _ROLE_OPTIONS}
 
     def _t(self, ru: str, kk: str) -> str:
         return t(self.lang, ru, kk)
@@ -224,18 +235,19 @@ class EveningPlanner:
         return self._compose(request, plan_id)
 
     def featured(self, now: datetime) -> dict:
-        """«Для тебя сегодня»: до 16:00 — рабочий день, потом — спокойный вечер вдвоём."""
-        if now.hour < 16:
+        """«Для тебя сегодня»: до 16:00 — рабочий день (если есть подходящая кофейня),
+        потом — спокойный вечер вдвоём."""
+        if now.hour < 16 and self._candidates["work"]:
             return self._work_day()
         return self._compose(default_request(), CALM_EVENING_ID, image=SCENARIO_EVENING_IMAGE)
 
     def library(self) -> list[dict]:
-        """Готовые сценарии (для избранного и главной)."""
-        return [
-            self._compose(default_request(), CALM_EVENING_ID, image=SCENARIO_EVENING_IMAGE),
-            self._work_day(),
-            self._compose(self._active_saturday_request(), ACTIVE_SATURDAY_ID),
-        ]
+        """Готовые сценарии (для избранного и главной); без мест для них — меньше."""
+        result = [self._compose(default_request(), CALM_EVENING_ID, image=SCENARIO_EVENING_IMAGE)]
+        if self._candidates["work"]:
+            result.append(self._work_day())
+        result.append(self._compose(self._active_saturday_request(), ACTIVE_SATURDAY_ID))
+        return [scenario for scenario in result if scenario["stops"]]
 
     def localize(self, scenario: dict) -> dict:
         """Тот же план (точки, время, цены), но тексты — на языке ответа."""
@@ -259,7 +271,7 @@ class EveningPlanner:
         no_cinema = _no_cinema(request)
         used = {stop["placeId"] for stop in scenario["stops"]}
         result = []
-        for candidate in _all_candidates_for(current["role"]):
+        for candidate in self._all_candidates_for(current["role"]):
             if candidate.place_id in used:
                 continue
             stop = self._to_stop(current["role"], candidate, current["startMinutes"])
@@ -315,7 +327,7 @@ class EveningPlanner:
                     best = list(chosen)
                     best_penalty = penalty
                 return
-            for c, candidate in enumerate(_CANDIDATES.get(roles[i], [])):
+            for c, candidate in enumerate(self._candidates.get(roles[i], [])):
                 if no_cinema and self._is_cinema(candidate.place_id):
                     continue
                 if any(s["placeId"] == candidate.place_id for s in chosen):
@@ -335,10 +347,12 @@ class EveningPlanner:
         return best
 
     def _work_day(self) -> dict:
-        candidate = _CANDIDATES["work"][0]
-        stop = self._to_stop("work", candidate, 10 * 60)
+        candidates = self._candidates["work"]
+        if not candidates:
+            raise LookupError("В каталоге нет кофейни с Wi-Fi и розетками")
+        stop = self._to_stop("work", candidates[0], 10 * 60)
         if stop is None:
-            raise LookupError(f"В каталоге нет места {candidate.place_id}")
+            raise LookupError(f"В каталоге нет места {candidates[0].place_id}")
         return _scenario(
             WORK_DAY_ID,
             self._t("Спокойный день", "Тыныш күн"),
@@ -398,15 +412,26 @@ class EveningPlanner:
         return result, legs
 
     def _leg(self, from_id: str, to_id: str) -> dict:
-        """Переезд: пешком до 0,8 км, иначе такси."""
+        """Переезд: пешком до 0,8 км по городу, иначе такси. Путь по улицам — прямая × 1,3."""
         origin = self._place(from_id)
         target = self._place(to_id)
         if origin is None or target is None:
             return {"mode": "taxi", "minutes": 10}
-        km = abs(origin["distanceKm"] - target["distanceKm"]) + 0.3
+        a, b = geo.point(origin.get("location")), geo.point(target.get("location"))
+        if a is not None and b is not None:
+            km = geo.distance_km(a, b) * 1.3
+        else:
+            km = abs(origin["distanceKm"] - target["distanceKm"]) + 0.3
         if km <= 0.8:
             return {"mode": "walk", "minutes": _at_least_5(dart_round(km * 12))}
         return {"mode": "taxi", "minutes": _at_least_5(dart_round(km * 3 + 4))}
+
+    def _all_candidates_for(self, role: str) -> list[Candidate]:
+        result = list(self._candidates.get(role, []))
+        # Для активностей и культуры можно предложить и «что-то новое».
+        if role in ("activity", "culture"):
+            result += self._candidates["novelty"]
+        return result
 
     def _is_cinema(self, place_id: str) -> bool:
         place = self._place(place_id)
@@ -420,12 +445,6 @@ def _stop_at(scenario: dict, index: int) -> dict:
     return stops[index]
 
 
-def _all_candidates_for(role: str) -> list[Candidate]:
-    result = list(_CANDIDATES.get(role, []))
-    # Для активностей и культуры можно предложить и «что-то новое».
-    if role in ("activity", "culture"):
-        result += _CANDIDATES["novelty"]
-    return result
 
 
 def _no_cinema(request: dict | None) -> bool:
